@@ -228,21 +228,8 @@ function addAuthProtection() {
     });
   }
 
-  // Bouton "Acheter"
-  const buyBtns = document.querySelectorAll('[data-action="buy-property"]');
-  buyBtns.forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      e.preventDefault();
-      const authStatus = await checkAuth();
-      if (!authStatus.loggedIn) {
-        const propertyId = btn.getAttribute('data-property-id');
-        redirectToLogin(`detail.html?id=${propertyId}`);
-      } else {
-        const propertyId = btn.getAttribute('data-property-id');
-        window.location.href = `detail.html?id=${propertyId}`;
-      }
-    });
-  });
+  // ✅ Auth check for buy button is handled inside detail.js setupPurchaseModal()
+  // (checks auth before opening modal, redirects to login if needed)
 
   // ✅ Auth check for rent button is handled inside detail.js setupReservationModal()
   // (checks auth before opening modal, redirects to login if needed)

@@ -64,9 +64,53 @@
     </div>
   </div>
 
+  <!-- ✅ Purchase Modal -->
+  <div id="purchaseModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:1000;align-items:center;justify-content:center">
+    <div style="background:white;border-radius:12px;padding:32px;max-width:500px;width:90%;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px">
+        <h2 style="font-size:24px;font-weight:700;margin:0">Demander à acheter</h2>
+        <button id="closePurchaseModal" style="background:none;border:none;font-size:24px;cursor:pointer;color:var(--gray-400)">&times;</button>
+      </div>
+
+      <div id="purchasePropertyInfo" style="background:var(--gray-50);border-radius:8px;padding:12px;margin-bottom:16px;border-left:4px solid var(--accent)">
+        <p style="margin:0;font-size:13px;color:var(--gray-700)">💰 Prix : <strong id="purchasePriceDisplay">—</strong> DT</p>
+      </div>
+
+      <div id="purchaseMessage" class="error-alert" style="display:none;margin-bottom:16px;padding:12px 16px;border-radius:4px"></div>
+
+      <form id="purchaseForm" style="display:flex;flex-direction:column;gap:16px">
+        <div>
+          <label style="display:block;font-weight:600;margin-bottom:8px;color:var(--gray-900)">Préférence de contact *</label>
+          <select id="purchaseContactPref" required style="width:100%;padding:12px;border:1px solid var(--gray-300);border-radius:8px;font-size:14px;background:white">
+            <option value="Email">📧 Email</option>
+            <option value="Appel">📞 Appel téléphonique</option>
+            <option value="Whatsapp">💬 WhatsApp</option>
+          </select>
+        </div>
+
+        <div>
+          <label style="display:block;font-weight:600;margin-bottom:8px;color:var(--gray-900)">Message (optionnel)</label>
+          <textarea id="purchaseMessage_text" rows="4" placeholder="Présentez-vous ou posez vos questions au vendeur..." style="width:100%;padding:12px;border:1px solid var(--gray-300);border-radius:8px;font-size:14px;resize:vertical;font-family:inherit;box-sizing:border-box"></textarea>
+        </div>
+
+        <div style="background:#fff8e1;padding:12px;border-radius:8px;border-left:4px solid #f9a825;font-size:12px;color:#5d4e37;line-height:1.5">
+          ℹ️ Votre demande sera transmise au vendeur. Il vous contactera via votre préférence pour finaliser la vente. Un contrat sera généré automatiquement après acceptation.
+        </div>
+
+        <button type="submit" style="background:linear-gradient(135deg,var(--accent),#e53e3e);color:white;padding:12px 24px;border:none;border-radius:8px;font-weight:600;cursor:pointer;font-size:14px;margin-top:8px">
+          Envoyer la demande d'achat
+        </button>
+      </form>
+    </div>
+  </div>
+
   <!-- ✅ Modal CSS -->
   <style>
     #reservationModal[style*="display: flex"] {
+      display: flex !important;
+    }
+
+    #purchaseModal[style*="display: flex"] {
       display: flex !important;
     }
 
@@ -93,8 +137,8 @@
 
   <section style="padding:24px;max-width:600px;margin:0 auto;background:#fff;border-radius:var(--radius-lg);border:1px solid var(--gray-300);margin-top:-20px;position:relative;z-index:1">
     <div id="actionButtons" style="display:flex;gap:12px;margin-bottom:24px">
-      <button class="cta-btn" data-action="buy-property" data-property-id="" style="flex:1;border:none;cursor:pointer">Acheter</button>
-      <button class="cta-btn" data-action="rent-property" data-property-id="" style="flex:1;border:none;cursor:pointer;background:linear-gradient(135deg,#667eea,#764ba2);color:white">Louer</button>
+      <button class="cta-btn" data-action="buy-property" data-property-id="" style="flex:1;border:none;cursor:pointer;display:none">Demande d'achat</button>
+      <button class="cta-btn" data-action="rent-property" data-property-id="" style="flex:1;border:none;cursor:pointer;background:linear-gradient(135deg,#667eea,#764ba2);color:white;display:none">Louer</button>
       <button class="cta-btn" data-action="visit-property" data-property-id="" style="flex:1;border:none;cursor:pointer">Visiter</button>
     </div>
 

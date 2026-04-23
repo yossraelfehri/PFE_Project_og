@@ -314,6 +314,7 @@ async function loadPropertyDetails() {
     // Remplir les détails
     displayPropertyDetails(property);
     setupReservationModal(property);
+    setupPurchaseModal(property);
 
   } catch(error) {
     console.error("Erreur:", error);
@@ -569,6 +570,158 @@ function setupReservationModal(property) {
       submitBtn.style.opacity = '1';
     }
   });
+}
+
+// ✅ Setup purchase modal (Demande d'achat)
+function setupPurchaseModal(property) {
+  console.log('🛒 setupPurchaseModal() called for property:', property?.ID, '| type_field:', property?.type_field);
+
+  const modal = document.getElementById('purchaseModal');
+  const closeBtn = document.getElementById('closePurchaseModal');
+  const buyBtn = document.querySelector('[data-action="buy-property"]');
+  const form = document.getElementById('purchaseForm');
+  const msgDiv = document.getElementById('purchaseMessage');
+  const priceDisplay = document.getElementById('purchasePriceDisplay');
+
+  if (!modal) { console.warn('⚠️ #purchaseModal not found in DOM'); return; }
+  if (!buyBtn) { console.warn('⚠️ [data-action="buy-property"] not found in DOM'); return; }
+  if (!form)   { console.warn('⚠️ #purchaseForm not found in DOM'); return; }
+
+  // ── Visibility logic ─────────────────────────────────────────
+  const typeField = (property.type_field || '').toLowerCase().trim();
+  const isSale = typeField.includes('for sale') || typeField.includes('vente') || typeField.includes('sale');
+
+  console.log(`🏷️ type_field="${property.type_field}" → isSale=${isSale}`);
+
+  if (!isSale) {
+    buyBtn.style.display = 'none';
+    console.log('❌ Demande d\'achat button HIDDEN (not a sale property)');
+    return;
+  }
+
+  buyBtn.textContent = "Demande d'achat";
+  buyBtn.style.display = 'block';
+  buyBtn.style.visibility = 'visible';
+  buyBtn.style.opacity = '1';
+  console.log('✅ Demande d\'achat button SHOWN');
+
+  if (priceDisplay) {
+    priceDisplay.textContent = property.Price1 || '—';
+  }
+
+  // ── Prevent duplicate listeners using a flag ──────────────────
+  if (buyBtn._purchaseListenerAttached) {
+    console.log('ℹ️ Purchase listener already attached, skipping');
+    return;
+  }
+  buyBtn._purchaseListenerAttached = true;
+
+  // ── Button click: auth check then open modal ──────────────────
+  buyBtn.addEventListener('click', async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    console.log('🖱️ Demande d\'achat button CLICKED');
+
+    const authStatus = await fetch('/api/auth-status').then(r => r.json());
+    console.log('🔐 Auth status:', authStatus);
+
+    if (!authStatus.loggedIn) {
+      console.log('🔒 Not logged in → redirecting to login');
+      window.location.href = `login.html?redirect=${encodeURIComponent('detail.html?id=' + property.ID)}`;
+      return;
+    }
+
+    // Reset and open modal
+    if (msgDiv) { msgDiv.className = ''; msgDiv.style.display = 'none'; }
+    form.reset();
+    modal.style.display = 'flex';
+    console.log('🎉 Purchase modal OPENED');
+  });
+
+  // ── Close button ──────────────────────────────────────────────
+  if (closeBtn) {
+    closeBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      modal.style.display = 'none';
+      console.log('🔒 Purchase modal CLOSED');
+    });
+  }
+
+  // ── ESC key ───────────────────────────────────────────────────
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal.style.display === 'flex') {
+      modal.style.display = 'none';
+    }
+  });
+
+  // ── Form submit ───────────────────────────────────────────────
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    console.log('📤 Purchase form SUBMITTED');
+
+    const contactPref = document.getElementById('purchaseContactPref')?.value || 'Email';
+    const message = document.getElementById('purchaseMessage_text')?.value.trim() || '';
+
+    // Re-verify auth before submitting
+    const authStatus = await fetch('/api/auth-status').then(r => r.json());
+    if (!authStatus.loggedIn) {
+      showPurchaseMsg(msgDiv, 'error', "⚠️ Vous devez être connecté pour soumettre une demande d'achat");
+      setTimeout(() => { window.location.href = 'login.html'; }, 1500);
+      return;
+    }
+
+    const submitBtn = form.querySelector('button[type="submit"]');
+    submitBtn.disabled = true;
+    submitBtn.style.opacity = '0.7';
+    submitBtn.textContent = 'Envoi en cours...';
+
+    const payload = {
+      property_id: property.ID,
+      preference_de_contact: contactPref,
+      message
+    };
+    console.log('📦 API payload:', payload);
+
+    try {
+      const response = await fetch('/api/purchases/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      console.log('📊 API response status:', response.status);
+      const data = await response.json();
+      console.log('📊 API response data:', data);
+
+      if (response.ok && data.success) {
+        showPurchaseMsg(msgDiv, 'success', '✓ Demande envoyée ! Le vendeur vous contactera prochainement.');
+        setTimeout(() => {
+          modal.style.display = 'none';
+          window.location.href = 'user_dashboard.html';
+        }, 2500);
+      } else {
+        showPurchaseMsg(msgDiv, 'error', `⚠️ ${data.error || "Erreur lors de l'envoi de la demande"}`);
+        submitBtn.disabled = false;
+        submitBtn.style.opacity = '1';
+        submitBtn.textContent = "Envoyer la demande d'achat";
+      }
+    } catch (error) {
+      console.error('❌ Network error during purchase submit:', error);
+      showPurchaseMsg(msgDiv, 'error', `⚠️ Erreur réseau : ${error.message}`);
+      submitBtn.disabled = false;
+      submitBtn.style.opacity = '1';
+      submitBtn.textContent = "Envoyer la demande d'achat";
+    }
+  });
+}
+
+// Helper to display a message inside the purchase modal
+function showPurchaseMsg(msgDiv, type, text) {
+  if (!msgDiv) return;
+  msgDiv.className = type === 'success' ? 'success-alert' : 'error-alert';
+  msgDiv.innerHTML = text;
+  msgDiv.style.display = 'block';
 }
 
 // Charger les détails au chargement de la page
