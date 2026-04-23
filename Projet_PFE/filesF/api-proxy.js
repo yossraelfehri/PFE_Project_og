@@ -205,6 +205,14 @@ function buildUsersReportUrl() {
   return "https://creator.zoho.com/api/v2/2demonexflow/gestion-immobili-re/report/All_Users";
 }
 
+function buildAddUserWorkflowUrl() {
+  return "https://creator.zoho.com/api/v2/2demonexflow/gestion-immobili-re/form/Add_User";
+}
+
+function buildDeleteUserWorkflowUrl() {
+  return "https://creator.zoho.com/api/v2/2demonexflow/gestion-immobili-re/form/Delete_User";
+}
+
 function getZohoAuthHeader(authType = 'bearer') {
   if (authType === 'oauthtoken') {
     return `Zoho-oauthtoken ${ZOHO_ACCESS_TOKEN}`;
@@ -1454,6 +1462,157 @@ app.get('/api/auth-status', (req, res) => {
     });
   } else {
     res.json({ loggedIn: false });
+  }
+});
+
+// ✅ Admin - récupérer tous les users depuis All_Users
+app.get('/api/admin/users', async (req, res) => {
+  try {
+    const { payload } = await fetchZohoJson(buildUsersReportUrl(), {
+      authType: 'bearer',
+      timeoutMs: 30000,
+      retries: 3,
+      fallbackMessage: 'Erreur lors du chargement des utilisateurs'
+    });
+
+    const users = Array.isArray(payload?.data) ? payload.data : [];
+    const limitReached = isZohoLimitPayload(payload);
+    const sourceUsers = (limitReached || users.length === 0) ? loadCachedUsers() : users;
+
+    if (!limitReached && users.length > 0) {
+      persistUsersCache(users);
+    }
+
+    return res.json({
+      success: true,
+      source: sourceUsers === users ? 'zoho' : 'cache',
+      users: sourceUsers
+    });
+  } catch (error) {
+    console.error('Erreur GET /api/admin/users:', error.message);
+    const fallbackUsers = loadCachedUsers();
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+      users: fallbackUsers,
+      source: 'cache'
+    });
+  }
+});
+
+// ✅ Admin - ajouter un user via workflow Add_User
+app.post('/api/admin/users/add', async (req, res) => {
+  try {
+    const {
+      ID1,
+      full_name,
+      Email,
+      Phone_Number,
+      Password,
+      Confirm_password,
+      Role
+    } = req.body || {};
+
+    if (!full_name || !Email || !Phone_Number || !Password || !Confirm_password) {
+      return res.status(400).json({
+        success: false,
+        error: 'Champs requis: full_name, Email, Phone_Number, Password, Confirm_password'
+      });
+    }
+
+    if (String(Password) !== String(Confirm_password)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Password et Confirm_password doivent correspondre'
+      });
+    }
+
+    const payloadData = {
+      full_name: String(full_name).trim(),
+      Email: String(Email).trim(),
+      Phone_Number: String(Phone_Number).trim(),
+      Password: String(Password),
+      Confirm_password: String(Confirm_password)
+    };
+
+    if (ID1 !== undefined && ID1 !== null && String(ID1).trim()) {
+      payloadData.ID1 = String(ID1).trim();
+    }
+
+    if (Role !== undefined && Role !== null && String(Role).trim()) {
+      payloadData.Role = String(Role).trim();
+    }
+
+    const { payload } = await fetchZohoJson(buildAddUserWorkflowUrl(), {
+      method: 'POST',
+      authType: 'bearer',
+      body: {
+        data: payloadData,
+        result: {
+          message: true
+        }
+      },
+      timeoutMs: 30000,
+      retries: 3,
+      requireSuccessCode: true,
+      fallbackMessage: 'Erreur lors de la création de l\'utilisateur'
+    });
+
+    return res.json({
+      success: true,
+      message: payload?.result?.[0]?.message || payload?.message || 'Utilisateur créé avec succès',
+      zoho: payload
+    });
+  } catch (error) {
+    console.error('Erreur POST /api/admin/users/add:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// ✅ Admin - supprimer un user via workflow Delete_User
+app.post('/api/admin/users/delete', async (req, res) => {
+  try {
+    const { ID1 } = req.body || {};
+    const userId = String(ID1 || '').trim();
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        error: 'ID1 est requis pour supprimer un utilisateur'
+      });
+    }
+
+    const { payload } = await fetchZohoJson(buildDeleteUserWorkflowUrl(), {
+      method: 'POST',
+      authType: 'bearer',
+      body: {
+        data: {
+          ID1: userId
+        },
+        result: {
+          message: true
+        }
+      },
+      timeoutMs: 30000,
+      retries: 3,
+      requireSuccessCode: true,
+      fallbackMessage: 'Erreur lors de la suppression de l\'utilisateur'
+    });
+
+    return res.json({
+      success: true,
+      message: payload?.result?.[0]?.message || payload?.message || 'Demande de suppression envoyée',
+      zoho: payload
+    });
+  } catch (error) {
+    console.error('Erreur POST /api/admin/users/delete:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: error.message
+    });
   }
 });
 
