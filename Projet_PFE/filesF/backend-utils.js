@@ -29,10 +29,41 @@ function delay(ms) {
 
 function extractZohoErrorMessage(payload, fallbackMessage) {
   if (!payload || typeof payload !== 'object') return fallbackMessage;
+
+  const toText = (value) => {
+    if (typeof value === 'string' && value.trim()) return value;
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const t = toText(item);
+        if (t) return t;
+      }
+      return '';
+    }
+    if (value && typeof value === 'object') {
+      if (Array.isArray(value.alert_message) && value.alert_message.length > 0) {
+        const t = toText(value.alert_message[0]);
+        if (t) return t;
+      }
+      if (value.message) {
+        const t = toText(value.message);
+        if (t) return t;
+      }
+      if (value.details) {
+        const t = toText(value.details);
+        if (t) return t;
+      }
+      if (value.error) {
+        const t = toText(value.error);
+        if (t) return t;
+      }
+    }
+    return '';
+  };
+
   return (
-    (Array.isArray(payload.error) ? payload.error[0] : payload.error) ||
-    payload.details ||
-    payload.message ||
+    toText(payload.error) ||
+    toText(payload.details) ||
+    toText(payload.message) ||
     fallbackMessage
   );
 }

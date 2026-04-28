@@ -73,6 +73,33 @@ const FALLBACK_USER_ID       = process.env.FALLBACK_USER_ID || '';
 const BASE_CREATOR    = 'https://creator.zoho.com/api/v2/2demonexflow/gestion-immobili-re';
 const BASE_CREATORAPP = 'https://creatorapp.zoho.com/api/v2/2demonexflow/gestion-immobili-re';
 const BASE_V21        = `https://${ZOHO_API_DOMAIN}/creator/v2.1/data/2demonexflow/gestion-immobili-re`;
+const BASE_V2_DATA    = `https://${ZOHO_API_DOMAIN}/creator/v2/data/2demonexflow/gestion-immobili-re`;
+const DELETE_USER_FORMS = String(process.env.DELETE_USER_WORKFLOW_FORMS || 'Delete_User_Request,Delete_User')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+const DELETE_USER_FIELD = process.env.DELETE_USER_WORKFLOW_FIELD || 'User_ID';
+const ADMIN_PROPERTIES_REPORT = process.env.ADMIN_PROPERTIES_REPORT_LINK_NAME || 'All_Properties';
+const PROPERTY_FORM_LINK_NAME = process.env.PROPERTY_FORM_LINK_NAME || 'Property';
+const PROPERTY_VALIDATION_FIELD = process.env.PROPERTY_VALIDATION_FIELD || 'Validation_Status';
+const APPROVED_STATUS_VALUE = process.env.PROPERTY_APPROVED_VALUE || 'approved';
+const REJECTED_STATUS_VALUE = process.env.PROPERTY_REJECTED_VALUE || 'rejected';
+const PENDING_STATUS_VALUE = process.env.PROPERTY_PENDING_VALUE || 'pending';
+const DELETE_PROPERTY_FORMS = String(process.env.DELETE_PROPERTY_WORKFLOW_FORMS || 'Delete_Property')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+const DELETE_PROPERTY_FIELD = process.env.DELETE_PROPERTY_WORKFLOW_FIELD || 'Property_ID';
+const APPROVE_PROPERTY_FORMS = String(process.env.APPROVE_PROPERTY_WORKFLOW_FORMS || 'Approve_Property')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+const APPROVE_PROPERTY_FIELD = process.env.APPROVE_PROPERTY_WORKFLOW_FIELD || 'Property_ID';
+const REJECT_PROPERTY_FORMS = String(process.env.REJECT_PROPERTY_WORKFLOW_FORMS || 'Reject_Property')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+const REJECT_PROPERTY_FIELD = process.env.REJECT_PROPERTY_WORKFLOW_FIELD || 'Property_ID';
 
 // ─── Cache / timing constants ─────────────────────────────────────────────────
 const PROPERTIES_TTL_MS      = Math.max(1000, Number(process.env.PROPERTIES_CACHE_TTL_MS    || 120000));
@@ -84,6 +111,7 @@ const LOCAL_UPLOADS_DIR           = path.join(__dirname, 'uploads');
 const PROPERTIES_CACHE_PATH       = path.join(__dirname, 'zoho_properties_sample.json');
 const PROPERTIES_CACHE_FALLBACK   = path.join(__dirname, 'api_properties_include.json');
 const PROPERTIES_CACHE_BULK       = path.join(__dirname, 'api_test_include_image.json');
+const PROPERTY_VALIDATION_CACHE_PATH = path.join(__dirname, 'property_validation_cache.json');
 const USERS_CACHE_PATH            = path.join(__dirname, 'users_cache.json');
 
 const IMAGE_FIELD_CANDIDATES = ['image','Image','photo','Photo','property_image','Property_Image','featured_image'];
@@ -102,6 +130,54 @@ let metadataImageFieldCandidatesAt  = 0;
 const propertiesResponseCache = new Map();
 const propertyDetailCache     = new Map();
 const imageFieldMapCache      = new Map();
+
+function loadPropertyValidationOverrides() {
+  try {
+    if (!fs.existsSync(PROPERTY_VALIDATION_CACHE_PATH)) return {};
+    return safeParseJsonFile(fs, PROPERTY_VALIDATION_CACHE_PATH);
+  } catch (err) {
+    console.warn('⚠️ Property validation cache read failed:', err.message);
+    return {};
+  }
+}
+
+const propertyValidationOverrides = loadPropertyValidationOverrides();
+
+function persistPropertyValidationOverrides() {
+  try {
+    fs.writeFileSync(PROPERTY_VALIDATION_CACHE_PATH, JSON.stringify(propertyValidationOverrides, null, 2));
+  } catch (err) {
+    console.warn('⚠️ Property validation cache write failed:', err.message);
+  }
+}
+
+function getPropertyValidationOverride(record) {
+  const candidates = [record?.ID1, record?.ID, record?.id]
+    .map((v) => String(v || '').trim())
+    .filter(Boolean);
+
+  for (const key of candidates) {
+    const value = propertyValidationOverrides[key];
+    if (value != null) return normalizeValidationStatus(value);
+  }
+
+  return '';
+}
+
+function setPropertyValidationOverride(propertyId, statusValue) {
+  const key = String(propertyId || '').trim();
+  if (!key) return;
+  propertyValidationOverrides[key] = normalizeValidationStatus(statusValue);
+  persistPropertyValidationOverrides();
+}
+
+function removePropertyValidationOverride(propertyId) {
+  const key = String(propertyId || '').trim();
+  if (!key) return;
+  if (propertyValidationOverrides[key] == null) return;
+  delete propertyValidationOverrides[key];
+  persistPropertyValidationOverrides();
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // OAUTH TOKEN MANAGEMENT
@@ -254,6 +330,49 @@ async function fetchZohoJson(url, {
 function extractWorkflowAlertMessage(payload, fallback = 'Une erreur est survenue') {
   if (!payload) return fallback;
 
+  const deepFindErrorText = (value, depth = 0) => {
+    if (depth > 6 || value == null) return '';
+    if (typeof value === 'string') {
+      const t = value.trim();
+      return t && t !== '[object Object]' ? t : '';
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const t = deepFindErrorText(item, depth + 1);
+        if (t) return t;
+      }
+      return '';
+    }
+    if (typeof value === 'object') {
+      const priorityKeys = ['alert_message', 'message', 'messages', 'details', 'detail', 'error', 'description', 'reason'];
+      for (const key of priorityKeys) {
+        if (key in value) {
+          const t = deepFindErrorText(value[key], depth + 1);
+          if (t) return t;
+        }
+      }
+
+      for (const [k, v] of Object.entries(value)) {
+        if (/(message|error|detail|alert|description|reason)/i.test(k)) {
+          const t = deepFindErrorText(v, depth + 1);
+          if (t) return t;
+        }
+      }
+
+      for (const v of Object.values(value)) {
+        const t = deepFindErrorText(v, depth + 1);
+        if (t) return t;
+      }
+    }
+    return '';
+  };
+
+  // Reuse generic Zoho error extraction first (handles nested objects/arrays)
+  const genericMsg = extractZohoErrorMessage(payload, '');
+  if (genericMsg && genericMsg !== '[object Object]') {
+    return genericMsg;
+  }
+
   // Zoho workflow alert structure: { error: [{ alert_message: ["msg"] }] }
   if (Array.isArray(payload.error) && payload.error.length > 0) {
     const first = payload.error[0];
@@ -265,8 +384,25 @@ function extractWorkflowAlertMessage(payload, fallback = 'Une erreur est survenu
   }
 
   if (typeof payload.error === 'string') return payload.error;
+  if (Array.isArray(payload.result) && payload.result.length > 0) {
+    for (const item of payload.result) {
+      if (typeof item === 'string' && item.trim()) return item;
+      if (item?.message) return item.message;
+      if (item?.details) return item.details;
+      if (item?.error) {
+        const itemErr = extractZohoErrorMessage(item, '');
+        if (itemErr) return itemErr;
+      }
+    }
+  }
+  if (payload.result && typeof payload.result === 'string') return payload.result;
   if (payload.message) return payload.message;
   if (payload.details) return payload.details;
+
+  const deepMessage = deepFindErrorText(payload);
+  if (deepMessage) return deepMessage;
+
+  if (payload.code) return `${fallback} (code ${payload.code})`;
 
   return fallback;
 }
@@ -302,6 +438,18 @@ function persistUsersCache(users) {
     existing.forEach(push);
     fs.writeFileSync(USERS_CACHE_PATH, JSON.stringify(merged, null, 2));
   } catch (err) { console.warn('⚠️ Users cache write failed:', err.message); }
+}
+
+function removeUserFromCacheById(userId) {
+  const target = String(userId || '').trim();
+  if (!target) return;
+  try {
+    const existing = loadCachedUsers();
+    const filtered = existing.filter((u) => String(u?.ID || u?.ID1 || '').trim() !== target);
+    fs.writeFileSync(USERS_CACHE_PATH, JSON.stringify(filtered, null, 2));
+  } catch (err) {
+    console.warn('⚠️ Users cache delete failed:', err.message);
+  }
 }
 
 function isUsersCacheFresh() {
@@ -404,6 +552,98 @@ function setCachedPropertiesResponse(key, data) {
 }
 
 function clearPropertiesResponseCache() { propertiesResponseCache.clear(); }
+
+function normalizeValidationStatus(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function getPropertyValidationStatus(record) {
+  return normalizeValidationStatus(
+    record?.Validation_Status ||
+    record?.validation_status ||
+    record?.validationStatus ||
+    record?.ValidationStatus ||
+    record?.[PROPERTY_VALIDATION_FIELD]
+  );
+}
+
+function getEffectivePropertyValidationStatus(record) {
+  const status = getPropertyValidationStatus(record);
+  if (status) return status;
+  return getPropertyValidationOverride(record);
+}
+
+function isPropertyApproved(record) {
+  const status = getEffectivePropertyValidationStatus(record);
+
+  // Old records without moderation status stay visible (backward compatibility)
+  if (!status) return true;
+
+  // Explicitly pending or rejected → hide from public site
+  if (status === normalizeValidationStatus(PENDING_STATUS_VALUE)) return false;
+  if (status === normalizeValidationStatus(REJECTED_STATUS_VALUE)) return false;
+
+  // Explicitly approved (or any other non-blocking value) → show
+  return status === normalizeValidationStatus(APPROVED_STATUS_VALUE);
+}
+
+function isPropertyPending(record) {
+  return getEffectivePropertyValidationStatus(record) === normalizeValidationStatus(PENDING_STATUS_VALUE);
+}
+
+function isPropertyRejected(record) {
+  return getEffectivePropertyValidationStatus(record) === normalizeValidationStatus(REJECTED_STATUS_VALUE);
+}
+
+function matchesPropertyIdentifier(record, target) {
+  const t = String(target || '').trim();
+  if (!t) return false;
+  const id = String(record?.ID || '').trim();
+  const id1 = String(record?.ID1 || '').trim();
+  return id === t || id1 === t;
+}
+
+function removePropertyFromCacheById(propertyId) {
+  const target = String(propertyId || '').trim();
+  if (!target) return;
+  removePropertyValidationOverride(target);
+  try {
+    const existing = loadCachedProperties();
+    const related = existing.filter((p) => matchesPropertyIdentifier(p, target));
+    for (const p of related) {
+      removePropertyValidationOverride(p?.ID);
+      removePropertyValidationOverride(p?.ID1);
+    }
+    const filtered = existing.filter((p) => !matchesPropertyIdentifier(p, target));
+    fs.writeFileSync(PROPERTIES_CACHE_PATH, JSON.stringify(filtered, null, 2));
+  } catch (err) {
+    console.warn('⚠️ Properties cache delete failed:', err.message);
+  }
+}
+
+function updatePropertyValidationStatusInCache(propertyId, statusValue) {
+  const target = String(propertyId || '').trim();
+  if (!target) return;
+  try {
+    const existing = loadCachedProperties();
+    const related = existing.filter((p) => matchesPropertyIdentifier(p, target));
+    if (related.length === 0) {
+      setPropertyValidationOverride(target, statusValue);
+    } else {
+      for (const p of related) {
+        setPropertyValidationOverride(p?.ID, statusValue);
+        setPropertyValidationOverride(p?.ID1, statusValue);
+      }
+    }
+    const normalized = existing.map((p) => {
+      if (!matchesPropertyIdentifier(p, target)) return p;
+      return { ...p, [PROPERTY_VALIDATION_FIELD]: statusValue, Validation_Status: statusValue };
+    });
+    fs.writeFileSync(PROPERTIES_CACHE_PATH, JSON.stringify(normalized, null, 2));
+  } catch (err) {
+    console.warn('⚠️ Properties cache update failed:', err.message);
+  }
+}
 
 function inferFallbackUserId() {
   if (FALLBACK_USER_ID) return FALLBACK_USER_ID;
@@ -764,9 +1004,10 @@ app.post('/api/signup', async (req, res) => {
         full_name: { first_name, last_name },
         Email: normalizedEmail,
         Phone_Number: phone_number,
+        Role: 'User',
         Password: password,
         Confirm_password: confirm_password
-        // Role and uniqueness check → handled by Zoho workflow "Add_User"
+        // Role defaults to User for public signup
       }
     };
 
@@ -847,12 +1088,26 @@ app.get('/api/properties', async (req, res) => {
 
         const data = await response.json();
         if (isZohoLimitPayload(data) && !data.data?.length) {
-          const fallback = loadCachedProperties().map(enrichPropertyWithImage);
+          const fallback = loadCachedProperties().filter(isPropertyApproved).map(enrichPropertyWithImage);
           return res.json({ code: 3000, source: 'cache', data: hasLimit ? fallback.slice(0, limit) : fallback });
         }
 
-        let properties = (data.data || []).map(enrichPropertyWithImage);
+        if (!Array.isArray(data.data) || data.data.length === 0) {
+          const fallback = loadCachedProperties().filter(isPropertyApproved).map(enrichPropertyWithImage);
+          if (fallback.length > 0) {
+            return res.json({ code: 3000, source: 'cache-empty-zoho', data: hasLimit ? fallback.slice(0, limit) : fallback });
+          }
+        }
+
+        let properties = (data.data || []).filter(isPropertyApproved).map(enrichPropertyWithImage);
         if (hasLimit) properties = properties.slice(0, limit);
+
+        if (properties.length === 0) {
+          const fallback = loadCachedProperties().filter(isPropertyApproved).map(enrichPropertyWithImage);
+          if (fallback.length > 0) {
+            return res.json({ code: 3000, source: 'cache-filtered-zoho', data: hasLimit ? fallback.slice(0, limit) : fallback });
+          }
+        }
 
         if (properties.length) {
           persistPropertiesCache(properties);
@@ -867,7 +1122,7 @@ app.get('/api/properties', async (req, res) => {
         return res.json(result);
       } catch (err) {
         if (attempt >= 2 || isOfflineError(err)) {
-          const fallback = loadCachedProperties().map(enrichPropertyWithImage);
+          const fallback = loadCachedProperties().filter(isPropertyApproved).map(enrichPropertyWithImage);
           if (fallback.length) {
             return res.json({ code: 3000, source: 'cache', warning: err.message, data: hasLimit ? fallback.slice(0, limit) : fallback });
           }
@@ -929,6 +1184,7 @@ app.post('/api/properties/create', requireAuth, async (req, res) => {
         Floor: floor ? parseInt(floor) : null,
         Year_Built: year_built ? convertDateToZoho(year_built) : null,
         status,
+        [PROPERTY_VALIDATION_FIELD]: PENDING_STATUS_VALUE,
         User: req.session.userId,
         ...(locationPayload ? { location: locationPayload } : {}),
         ...(typeof image === 'string' && /^https?:\/\//i.test(image) ? { image, Image: image } : {})
@@ -964,11 +1220,14 @@ app.post('/api/properties/create', requireAuth, async (req, res) => {
     if (createdId) {
       const cached = enrichPropertyWithImage({
         ID: String(createdId), title, description, Price1: String(price), status,
+        [PROPERTY_VALIDATION_FIELD]: PENDING_STATUS_VALUE,
+        Validation_Status: PENDING_STATUS_VALUE,
         type_field: normalizedType, location: locationPayload,
         User: { ID: req.session.userId },
         Image: imageUploads.map(u => u.localImageUrl).filter(Boolean)
       });
       appendPropertyToCache(cached);
+      setPropertyValidationOverride(createdId, PENDING_STATUS_VALUE);
       clearPropertiesResponseCache();
       setCachedPropertyDetail(createdId, cached);
     }
@@ -1147,6 +1406,440 @@ app.get('/api/payments/user', requireAuth, async (req, res) => {
     });
     res.json({ success: true, data: payload.data || [] });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ROUTES — ADMIN USERS MANAGEMENT
+// ─────────────────────────────────────────────────────────────────────────────
+
+// GET all users for admin panel
+app.get('/api/admin/users', async (req, res) => {
+  try {
+    console.log('📋 Admin: Fetching all users...');
+
+    // Try cache first
+    if (isUsersCacheFresh()) {
+      const cached = loadCachedUsers();
+      if (cached.length > 0) {
+        return res.json({ success: true, users: cached, source: 'cache' });
+      }
+    }
+
+    // Fetch from Zoho
+    const { payload } = await fetchZohoJson(buildUsersReportUrl(), {
+      retries: 3,
+      fallbackMessage: 'Erreur récupération des utilisateurs'
+    });
+
+    const users = payload.data || [];
+    if (users.length > 0) {
+      persistUsersCache(users);
+    }
+
+    console.log(`✅ Admin users loaded: ${users.length} records`);
+    res.json({ success: true, users: users.length > 0 ? users : loadCachedUsers(), source: 'zoho' });
+  } catch (err) {
+    console.error('❌ Admin users fetch error:', err.message);
+    const fallback = loadCachedUsers();
+    res.json({ success: true, users: fallback, source: 'cache-fallback', warning: err.message });
+  }
+});
+
+// POST create new user (admin panel)
+app.post('/api/admin/users/add', async (req, res) => {
+  try {
+    const { first_name, last_name, email, phone_number, password, confirm_password, role } = req.body;
+
+    // Validate required fields
+    if (!first_name || !last_name || !email || !password || !confirm_password) {
+      return res.status(400).json({ error: 'Tous les champs sont requis (nom, prénom, email, mot de passe)' });
+    }
+
+    const normalizedEmail = String(email).trim();
+
+    console.log(`📝 Admin: Creating user — ${normalizedEmail}, role: ${role || 'client'}`);
+
+    const formUrl = `${BASE_CREATOR}/form/User`;
+    const requestBody = {
+      data: {
+        full_name: { first_name, last_name },
+        Email: normalizedEmail,
+        Phone_Number: phone_number || '',
+        Password: password,
+        Confirm_password: confirm_password,
+        Role: role || 'User'
+        // Workflow "Add_User" handles validation + uniqueness check
+      }
+    };
+
+    let createData;
+    try {
+      const { payload } = await fetchZohoJson(formUrl, {
+        method: 'POST',
+        authType: 'bearer',
+        body: requestBody,
+        retries: 3,
+        fallbackMessage: 'Erreur création utilisateur'
+      });
+      createData = payload;
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+
+    // Surface Zoho workflow alert messages
+    if (createData?.error || (createData?.code && Number(createData.code) !== 3000)) {
+      const msg = extractWorkflowAlertMessage(createData, 'Erreur lors de la création de l\'utilisateur');
+      return res.status(400).json({ error: msg });
+    }
+
+    // Update users cache
+    const newUser = {
+      ID: createData.data?.ID || `new-${Date.now()}`,
+      Email: normalizedEmail,
+      Password: password,
+      Phone_Number: phone_number || '',
+      full_name: { first_name, last_name },
+      Role: role || 'User'
+    };
+    persistUsersCache([newUser]);
+
+    console.log(`✅ Admin: User created — ${normalizedEmail}`);
+    res.json({ success: true, message: 'Utilisateur créé avec succès!', data: newUser });
+  } catch (err) {
+    console.error('❌ Admin create user error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST delete user (admin panel)
+app.post('/api/admin/users/delete', async (req, res) => {
+  try {
+    const { ID1 } = req.body;
+    if (!ID1) return res.status(400).json({ error: 'ID utilisateur requis' });
+
+    console.log(`🗑️  Admin: Deleting user — ${ID1}`);
+    await ensureValidToken();
+
+    // ─── Step 1: Try workflow form if configured in .env (éviter si vide) ──────────
+    if (DELETE_USER_FORMS.length > 0) {
+      const workflowBases = [BASE_CREATOR, BASE_CREATORAPP];
+      for (const baseUrl of workflowBases) {
+        for (const formName of DELETE_USER_FORMS) {
+          try {
+            const wfUrl = `${baseUrl}/form/${formName}`;
+            const { payload } = await fetchZohoJson(wfUrl, {
+              method: 'POST',
+              authType: 'bearer',
+              body: { data: { [DELETE_USER_FIELD]: String(ID1) }, result: { message: true } },
+              retries: 2,
+              requireSuccessCode: true,
+              fallbackMessage: `Erreur workflow ${formName}`
+            });
+            removeUserFromCacheById(ID1);
+            console.log(`✅ Admin: User deleted via workflow ${formName} — ${ID1}`);
+            return res.json({ success: true, message: 'Utilisateur supprimé avec succès!', workflow: formName });
+          } catch (err) {
+            const wfErr = String(err?.message || '');
+            const canFallbackToDirectDelete =
+              wfErr.includes('(404)') ||
+              wfErr.includes('(401)') ||
+              wfErr.includes('(403)');
+
+            if (!canFallbackToDirectDelete) {
+              return res.status(400).json({ error: `Suppression échouée: ${err.message}` });
+            }
+
+            console.warn(`Workflow delete fallback (${formName}): ${wfErr}`);
+          }
+        }
+      }
+    }
+
+    // ─── Step 2: Suppression directe via DELETE sur le report All_Users ────────
+    const directBases = [BASE_CREATOR, BASE_CREATORAPP];
+    const reportName  = 'All_Users';
+    for (const base of directBases) {
+      const url = `${base}/report/${reportName}/${ID1}`;
+      try {
+        const response = await fetch(url, {
+          method: 'DELETE',
+          headers: { Authorization: `Zoho-oauthtoken ${ZOHO_ACCESS_TOKEN}` }
+        });
+        const text   = await response.text();
+        const result = text ? JSON.parse(text) : {};
+        console.log(`Delete direct response [${response.status}]:`, JSON.stringify(result));
+
+        if (response.status === 200 || response.status === 204 || result?.code === 3000) {
+          removeUserFromCacheById(ID1);
+          console.log(`✅ Admin: User deleted via direct report — ${ID1}`);
+          return res.json({ success: true, message: 'Utilisateur supprimé avec succès!' });
+        }
+        if (response.status === 401 || response.status === 403) {
+          return res.status(403).json({ error: 'Scope ZohoCreator.report.DELETE manquant. Ajoutez ce scope à votre OAuth.' });
+        }
+      } catch (err) {
+        console.warn(`Direct delete attempt failed (${base}):`, err.message);
+      }
+    }
+
+    return res.status(400).json({
+      error: 'Suppression échouée: Les deux méthodes (workflow + delete direct) ont échoué. Vérifier que le scope ZohoCreator.report.DELETE est activé dans votre app OAuth.'
+    });
+  } catch (err) {
+    console.error('❌ Admin delete user error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+async function tryPropertyWorkflowAction({ forms, fieldName, propertyId, actionLabel }) {
+  const workflowBases = [BASE_CREATOR, BASE_CREATORAPP];
+  let lastWorkflowError = '';
+
+  for (const baseUrl of workflowBases) {
+    for (const formName of forms) {
+      try {
+        const wfUrl = `${baseUrl}/form/${formName}`;
+        await fetchZohoJson(wfUrl, {
+          method: 'POST',
+          authType: 'bearer',
+          body: {
+            data: {
+              [fieldName]: String(propertyId),
+              Property_ID: String(propertyId),
+              ID1: String(propertyId),
+              ID: String(propertyId)
+            },
+            result: { message: true }
+          },
+          retries: 2,
+          requireSuccessCode: true,
+          fallbackMessage: `Erreur workflow ${formName}`
+        });
+
+        console.log(`✅ Admin property: ${actionLabel} via workflow ${formName} — ${propertyId}`);
+        return { success: true, workflow: formName };
+      } catch (err) {
+        const wfErr = String(err?.message || '');
+        lastWorkflowError = wfErr || lastWorkflowError;
+        const canFallback = wfErr.includes('(404)') || wfErr.includes('(401)') || wfErr.includes('(403)');
+        if (!canFallback) {
+          throw new Error(`Action ${actionLabel} échouée: ${wfErr}`);
+        }
+        console.warn(`Workflow fallback (${actionLabel}, ${formName}): ${wfErr}`);
+      }
+    }
+  }
+
+  return { success: false, lastError: lastWorkflowError };
+}
+
+async function updatePropertyValidationStatusDirect(propertyId, statusValue) {
+  const directBases = [BASE_CREATOR, BASE_CREATORAPP];
+  for (const base of directBases) {
+    const url = `${base}/report/${ADMIN_PROPERTIES_REPORT}/${propertyId}`;
+    try {
+      const response = await fetch(url, {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Zoho-oauthtoken ${ZOHO_ACCESS_TOKEN}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ data: { [PROPERTY_VALIDATION_FIELD]: statusValue } })
+      });
+
+      const text = await response.text();
+      const result = text ? JSON.parse(text) : {};
+
+      if (response.ok || result?.code === 3000) return true;
+      if (response.status === 401 || response.status === 403) {
+        throw new Error('Scope ZohoCreator.report.UPDATE manquant pour mise à jour Validation_Status.');
+      }
+    } catch (err) {
+      console.warn(`Direct update validation failed (${base}):`, err.message);
+    }
+  }
+  return false;
+}
+
+async function deletePropertyDirect(propertyId) {
+  const directBases = [BASE_CREATOR, BASE_CREATORAPP];
+  for (const base of directBases) {
+    const url = `${base}/report/${ADMIN_PROPERTIES_REPORT}/${propertyId}`;
+    try {
+      const response = await fetch(url, {
+        method: 'DELETE',
+        headers: { Authorization: `Zoho-oauthtoken ${ZOHO_ACCESS_TOKEN}` }
+      });
+
+      const text = await response.text();
+      const result = text ? JSON.parse(text) : {};
+      if (response.status === 200 || response.status === 204 || result?.code === 3000) return true;
+      if (response.status === 401 || response.status === 403) {
+        throw new Error('Scope ZohoCreator.report.DELETE manquant pour suppression propriété.');
+      }
+    } catch (err) {
+      console.warn(`Direct delete property failed (${base}):`, err.message);
+    }
+  }
+  return false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ROUTES — ADMIN PROPERTIES MANAGEMENT
+// ─────────────────────────────────────────────────────────────────────────────
+
+app.get('/api/admin/properties', async (req, res) => {
+  try {
+    console.log('🏘️ Admin: Fetching all properties...');
+
+    let records = [];
+    let source = 'zoho';
+
+    try {
+      const { payload } = await fetchZohoJson(`${BASE_CREATOR}/report/${ADMIN_PROPERTIES_REPORT}`, {
+        retries: 3,
+        fallbackMessage: 'Erreur récupération des propriétés'
+      });
+      records = Array.isArray(payload?.data) ? payload.data : [];
+      if (records.length > 0) {
+        persistPropertiesCache(records);
+      }
+    } catch (err) {
+      source = 'cache-fallback';
+      records = loadCachedProperties();
+      console.warn('⚠️ Admin properties fallback cache:', err.message);
+    }
+
+    const enriched = records.map(enrichPropertyWithImage);
+    const published = enriched.filter(isPropertyApproved);
+    const pending = enriched.filter(isPropertyPending);
+    const rejected = enriched.filter(isPropertyRejected);
+
+    res.json({
+      success: true,
+      source,
+      all: enriched,
+      published,
+      pending,
+      rejected
+    });
+  } catch (err) {
+    console.error('❌ Admin properties fetch error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/properties/approve', async (req, res) => {
+  try {
+    const propertyId = String(req.body?.ID1 || req.body?.ID || '').trim();
+    if (!propertyId) return res.status(400).json({ error: 'ID propriété requis' });
+
+    await ensureValidToken();
+    const workflowResult = await tryPropertyWorkflowAction({
+      forms: APPROVE_PROPERTY_FORMS,
+      fieldName: APPROVE_PROPERTY_FIELD,
+      propertyId,
+      actionLabel: 'approve'
+    });
+
+    let syncMode = 'workflow';
+    if (!workflowResult.success) {
+      const updated = await updatePropertyValidationStatusDirect(propertyId, APPROVED_STATUS_VALUE);
+      if (!updated) {
+        syncMode = 'local-fallback';
+        console.warn(`⚠️ Approve local fallback for property ${propertyId}: ${workflowResult.lastError || 'workflow+direct update failed'}`);
+      } else {
+        syncMode = 'direct-update';
+      }
+    }
+
+    updatePropertyValidationStatusInCache(propertyId, APPROVED_STATUS_VALUE);
+    clearPropertiesResponseCache();
+
+    res.json({
+      success: true,
+      message: syncMode === 'local-fallback'
+        ? 'Propriété approuvée localement (sync Zoho indisponible pour le moment).'
+        : 'Propriété approuvée avec succès!',
+      syncMode
+    });
+  } catch (err) {
+    console.error('❌ Admin approve property error:', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/properties/reject', async (req, res) => {
+  try {
+    const propertyId = String(req.body?.ID1 || req.body?.ID || '').trim();
+    if (!propertyId) return res.status(400).json({ error: 'ID propriété requis' });
+
+    await ensureValidToken();
+    const workflowResult = await tryPropertyWorkflowAction({
+      forms: REJECT_PROPERTY_FORMS,
+      fieldName: REJECT_PROPERTY_FIELD,
+      propertyId,
+      actionLabel: 'reject'
+    });
+
+    let syncMode = 'workflow';
+    if (!workflowResult.success) {
+      const updated = await updatePropertyValidationStatusDirect(propertyId, REJECTED_STATUS_VALUE);
+      if (!updated) {
+        syncMode = 'local-fallback';
+        console.warn(`⚠️ Reject local fallback for property ${propertyId}: ${workflowResult.lastError || 'workflow+direct update failed'}`);
+      } else {
+        syncMode = 'direct-update';
+      }
+    }
+
+    updatePropertyValidationStatusInCache(propertyId, REJECTED_STATUS_VALUE);
+    clearPropertiesResponseCache();
+
+    res.json({
+      success: true,
+      message: syncMode === 'local-fallback'
+        ? 'Propriété rejetée localement (sync Zoho indisponible pour le moment).'
+        : 'Propriété rejetée avec succès!',
+      syncMode
+    });
+  } catch (err) {
+    console.error('❌ Admin reject property error:', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/properties/delete', async (req, res) => {
+  try {
+    const propertyId = String(req.body?.ID1 || req.body?.ID || '').trim();
+    if (!propertyId) return res.status(400).json({ error: 'ID propriété requis' });
+
+    await ensureValidToken();
+    const workflowResult = await tryPropertyWorkflowAction({
+      forms: DELETE_PROPERTY_FORMS,
+      fieldName: DELETE_PROPERTY_FIELD,
+      propertyId,
+      actionLabel: 'delete'
+    });
+
+    if (!workflowResult.success) {
+      const deleted = await deletePropertyDirect(propertyId);
+      if (!deleted) {
+        return res.status(400).json({
+          error: `Suppression échouée. Workflow et delete direct KO. ${workflowResult.lastError || ''}`.trim()
+        });
+      }
+    }
+
+    removePropertyFromCacheById(propertyId);
+    clearPropertiesResponseCache();
+    propertyDetailCache.delete(propertyId);
+
+    res.json({ success: true, message: 'Propriété supprimée avec succès!' });
+  } catch (err) {
+    console.error('❌ Admin delete property error:', err.message);
+    res.status(400).json({ error: err.message });
+  }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -208,6 +208,36 @@
   </div>
 
   <script>
+    function toErrorMessage(value, fallback = 'Erreur lors de la création du compte') {
+      if (typeof value === 'string' && value.trim()) return value;
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          const msg = toErrorMessage(item, '');
+          if (msg) return msg;
+        }
+        return fallback;
+      }
+      if (value && typeof value === 'object') {
+        if (value.alert_message) {
+          const msg = toErrorMessage(value.alert_message, '');
+          if (msg) return msg;
+        }
+        if (value.message) {
+          const msg = toErrorMessage(value.message, '');
+          if (msg) return msg;
+        }
+        if (value.details) {
+          const msg = toErrorMessage(value.details, '');
+          if (msg) return msg;
+        }
+        if (value.error) {
+          const msg = toErrorMessage(value.error, '');
+          if (msg) return msg;
+        }
+      }
+      return fallback;
+    }
+
     document.getElementById('signupForm').addEventListener('submit', async (e) => {
       e.preventDefault();
 
@@ -267,7 +297,12 @@
           })
         });
 
-        const data = await response.json();
+        let data = {};
+        try {
+          data = await response.json();
+        } catch {
+          data = {};
+        }
 
         if (response.ok && data.success) {
           successMessage.textContent = '✓ Compte créé avec succès! Redirection...';
@@ -280,7 +315,7 @@
             window.location.href = redirect;
           }, 2000);
         } else {
-          errorMessage.textContent = data.error || 'Erreur lors de la création du compte';
+          errorMessage.textContent = toErrorMessage(data.error || data, 'Erreur lors de la création du compte');
           errorMessage.classList.add('show');
           submitBtn.classList.remove('loading');
           submitBtn.disabled = false;

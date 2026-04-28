@@ -356,6 +356,13 @@
           </div>
           <span>&bull;</span>
         </a>
+        <a class="menu-link" href="admin_properties.html">
+          <div>
+            <strong>Properties</strong>
+            <small>Valider, rejeter, supprimer</small>
+          </div>
+          <span>&rarr;</span>
+        </a>
       </nav>
 
       <div class="side-card">
@@ -445,42 +452,42 @@
       <form id="addUserForm">
         <div class="modal-body">
           <div class="field">
-            <label for="userIdInput">ID (optionnel)</label>
-            <input id="userIdInput" name="ID1" type="text" placeholder="Laisser vide si auto">
+            <label for="firstNameInput">Prénom *</label>
+            <input id="firstNameInput" name="first_name" type="text" required placeholder="Ahmed">
           </div>
 
           <div class="field">
-            <label for="userRoleInput">Rôle</label>
-            <select id="userRoleInput" name="Role">
-              <option value="Administrator">Administrator</option>
-              <option value="Agent">Agent</option>
-              <option value="User" selected>User</option>
-            </select>
-          </div>
-
-          <div class="field full">
-            <label for="fullNameInput">Nom complet *</label>
-            <input id="fullNameInput" name="full_name" type="text" required placeholder="Ex: Ahmed Ben Ali">
+            <label for="lastNameInput">Nom *</label>
+            <input id="lastNameInput" name="last_name" type="text" required placeholder="Ben Ali">
           </div>
 
           <div class="field">
             <label for="emailInput">Email *</label>
-            <input id="emailInput" name="Email" type="email" required placeholder="email@exemple.com">
+            <input id="emailInput" name="email" type="email" required placeholder="email@exemple.com">
           </div>
 
           <div class="field">
             <label for="phoneInput">Téléphone *</label>
-            <input id="phoneInput" name="Phone_Number" type="tel" required placeholder="+21655123456">
+            <input id="phoneInput" name="phone_number" type="tel" required placeholder="+21655123456">
+          </div>
+
+          <div class="field full">
+            <label for="userRoleInput">Rôle</label>
+            <select id="userRoleInput" name="role">
+              <option value="User" selected>User</option>
+              <option value="Agent">Agent</option>
+              <option value="Administrator">Administrator</option>
+            </select>
           </div>
 
           <div class="field">
-            <label for="passwordInput">Password *</label>
-            <input id="passwordInput" name="Password" type="password" required placeholder="********">
+            <label for="passwordInput">Mot de passe *</label>
+            <input id="passwordInput" name="password" type="password" required placeholder="Minimum 8 caractères">
           </div>
 
           <div class="field">
-            <label for="confirmPasswordInput">Confirm Password *</label>
-            <input id="confirmPasswordInput" name="Confirm_password" type="password" required placeholder="********">
+            <label for="confirmPasswordInput">Confirmer mot de passe *</label>
+            <input id="confirmPasswordInput" name="confirm_password" type="password" required placeholder="Répéter le mot de passe">
           </div>
 
           <div class="field full">
